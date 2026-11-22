@@ -1136,7 +1136,7 @@ LOADING_TAB_SCHEMA = {
             "schema": _SEISMIC_LOAD_TAB_SCHEMA,
             "refresh": [{
                             "widget_id": KEY_SL_SEISMIC_ZONE,
-                            "path": ["project.location", "weather_data", "zone"],
+                            "path": [KEY_PROJECT_LOCATION, "weather_data", "zone"],
                         }],
         },
         {
@@ -1144,7 +1144,7 @@ LOADING_TAB_SCHEMA = {
             "schema": _WIND_LOAD_TAB_SCHEMA,
             "refresh": [{
                             "widget_id": KEY_WL_BASIC_WIND_SPEED,
-                            "path": ["project.location", "weather_data", "wind_speed"]
+                            "path": [KEY_PROJECT_LOCATION, "weather_data", "wind_speed"]
                         }],
         },
         {
@@ -1152,11 +1152,11 @@ LOADING_TAB_SCHEMA = {
             "schema": _TEMPERATURE_LOAD_TAB_SCHEMA,
             "refresh": [{
                             "widget_id": KEY_TL_HIGHEST_MAX_TEMP, 
-                            "path": ["project.location", "weather_data", "max_temp"]
+                            "path": [KEY_PROJECT_LOCATION, "weather_data", "max_temp"]
                         },
                         {
                             "widget_id": KEY_TL_LOWEST_MIN_TEMP,
-                            "path": ["project.location", "weather_data", "min_temp"]
+                            "path": [KEY_PROJECT_LOCATION, "weather_data", "min_temp"]
                         }],
         },
         {"title": "Custom Load",      "schema": _CUSTOM_LOAD_TAB_SCHEMA,      "disable": True },

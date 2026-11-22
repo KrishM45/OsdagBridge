@@ -787,7 +787,111 @@ class CustomWindow(QWidget):
         # Connect to input dock's value changed signals
         # This will update the CAD whenever any input field changes
         if hasattr(self.input_dock, 'input_value_changed'):
-            self.input_dock.input_value_changed.connect(self.update_cad_from_inputs)        
+            self.input_dock.input_value_changed.connect(self.update_cad_from_inputs)
+        if hasattr(self, 'cad_comp_widget') and hasattr(self.cad_comp_widget, 'cad_parameter_edited'):
+            self.cad_comp_widget.cad_parameter_edited.connect(self.on_cad_parameter_edited)
+
+    def on_cad_parameter_edited(self, key: str, value: float):
+        """
+        Handle interactive 2D CAD editing for editable labels:
+        - KEY_SPAN (Span Length)
+        - KEY_CARRIAGEWAY_WIDTH (Carriageway Width)
+        - KEY_TS_GIRDER_SPACING (Girder Spacing)
+        - KEY_TS_DECK_THICKNESS (Deck Thickness)
+        """
+        if key in (KEY_SPAN, KEY_CARRIAGEWAY_WIDTH):
+            widget = self.input_dock._w(key) if hasattr(self, 'input_dock') and self.input_dock else None
+            if widget is not None and hasattr(widget, 'setText'):
+                widget.setText(f"{value:.2f}" if key == KEY_CARRIAGEWAY_WIDTH else f"{value:.1f}")
+                self.input_dock._on_field_edited(key, widget)
+            else:
+                self.input_dict[key] = value
+                try:
+                    solve_extend_basic_input_dict(self.input_dict)
+                except Exception:
+                    pass
+                self.cad_comp_widget.update_from_osdag_inputs(self.input_dict)
+            if self._additional_inputs_dialog is not None:
+                try:
+                    solve_extend_basic_input_dict(self.input_dict)
+                except Exception:
+                    pass
+                self._additional_inputs_dialog.set_input_dictionary(self.input_dict)
+
+        elif key == KEY_TS_GIRDER_SPACING:
+            from osdagbridge.core.bridge_types.plate_girder.validator import BridgeInputValidator
+            from osdagbridge.core.bridge_types.plate_girder.initial_sizing import BridgeConfigurationSolver
+            
+            temp_inputs = dict(self.input_dict)
+            temp_inputs[KEY_TS_GIRDER_SPACING] = value
+            val_res = BridgeInputValidator().validate_additional_inputs(KEY_TS_GIRDER_SPACING, temp_inputs)
+            if val_res is not None:
+                corrected, msg = val_res
+                CustomMessageBox(
+                    title="Input Error",
+                    text=msg,
+                    dialogType=MessageBoxType.Warning
+                ).exec()
+                value = corrected
+
+            footpath_str = str(self.input_dict.get(KEY_FOOTPATH, 'None')).strip()
+            if footpath_str in ('None', ''):
+                n_footpaths, footpath_width, railing_width = 0, 0.0, 0.0
+            elif 'Both' in footpath_str:
+                n_footpaths = 2
+                footpath_width = float(self.input_dict.get(KEY_TS_FOOTPATH_WIDTH, 1.5))
+                rw = self.input_dict.get(KEY_RL_WIDTH, 0.0)
+                railing_width = float(rw)/1000.0 if float(rw) > 10 else float(rw)
+            else:
+                n_footpaths = 1
+                footpath_width = float(self.input_dict.get(KEY_TS_FOOTPATH_WIDTH, 1.5))
+                rw = self.input_dict.get(KEY_RL_WIDTH, 0.0)
+                railing_width = float(rw)/1000.0 if float(rw) > 10 else float(rw)
+
+            solver = BridgeConfigurationSolver(
+                carriageway_width=float(self.input_dict.get(KEY_CARRIAGEWAY_WIDTH, 7.5)),
+                crash_barrier_width=float(self.input_dict.get(KEY_CB_WIDTH, 0.5)),
+                footpath_width=footpath_width,
+                railing_width=railing_width,
+                median_width=float(self.input_dict.get(KEY_MD_WIDTH, 0.0) or 0.0),
+                n_footpaths=n_footpaths,
+            )
+            n_girders = int(self.input_dict.get(KEY_TS_NO_OF_GIRDERS, 4))
+            try:
+                sizing_result = solver._solve_layout(no_of_girders=n_girders, girder_spacing=value, changed_field="spacing")
+                self.input_dict[KEY_TS_GIRDER_SPACING] = sizing_result.girder_spacing
+                self.input_dict[KEY_TS_DECK_OVERHANG] = sizing_result.deck_overhang
+                self.input_dict[KEY_TS_OVERALL_WIDTH] = sizing_result.overall_width
+            except Exception as e:
+                CustomMessageBox(
+                    title="Input Error",
+                    text=str(e),
+                    dialogType=MessageBoxType.Warning
+                ).exec()
+                return
+
+            if self._additional_inputs_dialog is not None:
+                self._additional_inputs_dialog.set_input_dictionary(self.input_dict)
+            self.cad_comp_widget.update_from_osdag_inputs(self.input_dict)
+
+        elif key == KEY_TS_DECK_THICKNESS:
+            from osdagbridge.core.bridge_types.plate_girder.validator import BridgeInputValidator
+            temp_inputs = dict(self.input_dict)
+            temp_inputs[KEY_TS_DECK_THICKNESS] = value
+            val_res = BridgeInputValidator().validate_additional_inputs(KEY_TS_DECK_THICKNESS, temp_inputs)
+            if val_res is not None:
+                corrected, msg = val_res
+                CustomMessageBox(
+                    title="Input Error",
+                    text=msg,
+                    dialogType=MessageBoxType.Warning
+                ).exec()
+                value = corrected
+
+            self.input_dict[KEY_TS_DECK_THICKNESS] = value
+            if self._additional_inputs_dialog is not None:
+                self._additional_inputs_dialog.set_input_dictionary(self.input_dict)
+            self.cad_comp_widget.update_from_osdag_inputs(self.input_dict)        
             
     # Function for saving input dictionary into an OSI file
     def saveOSI_inputs(self):
@@ -860,6 +964,10 @@ class CustomWindow(QWidget):
 
             # Sync additional inputs dialog if it has already been constructed
             if self._additional_inputs_dialog is not None:
+                try:
+                    solve_extend_basic_input_dict(self.input_dict)
+                except Exception:
+                    pass
                 self._additional_inputs_dialog.set_input_dictionary(self.input_dict)
 
             # Refresh 2D CAD to reflect loaded values

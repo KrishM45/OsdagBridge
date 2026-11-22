@@ -48,6 +48,8 @@ class AdditionalInputs(QDialog):
         self.default_input_dict = {}
         # Work temporarily on a copy of default dictionary
         self.working_input_dict = {}
+        # Saved baseline snapshot for detecting unsaved changes
+        self._saved_snapshot: dict = {}
         # Last confirmed-good spacing and girder count; restored if solver raises an error
         self._last_good_layout: dict = {}
 
@@ -235,16 +237,17 @@ class AdditionalInputs(QDialog):
         self.set_defaults()
 
         self.default_input_dict.update(self.working_input_dict)
+        if self.interacted_first:
+            self.interacted_first = False
+            from osdagbridge.core.bridge_types.plate_girder.ui_fields_additional_input import END_CONNECTORS
+            UIBuilder.wire_end_connectors(END_CONNECTORS, ai=self)
 
         self._last_good_layout = {
             KEY_TS_GIRDER_SPACING: self.working_input_dict.get(KEY_TS_GIRDER_SPACING),
             KEY_TS_NO_OF_GIRDERS:  self.working_input_dict.get(KEY_TS_NO_OF_GIRDERS),
         }
 
-        if self.interacted_first:
-            self.interacted_first = False
-            from osdagbridge.core.bridge_types.plate_girder.ui_fields_additional_input import END_CONNECTORS
-            UIBuilder.wire_end_connectors(END_CONNECTORS, ai=self)
+        self._saved_snapshot = deepcopy(self.working_input_dict)
 
     def set_defaults(self) -> None:  # lifecycle: populates all widgets from working_input_dict; called at init time only
         """
@@ -387,7 +390,8 @@ class AdditionalInputs(QDialog):
         from osdagbridge.desktop.ui.dialogs.additional_input.ui_builder._segment_table_widget import SegmentTableWidget
         seg_table = self.findChild(SegmentTableWidget, KEY_MP_GD_SEGMENT_TABLE)
         if seg_table is not None:
-            total_span = float(self.working_input_dict.get(KEY_SPAN))
+            span_val = self.working_input_dict.get(KEY_SPAN)
+            total_span = float(span_val if span_val not in (None, "") else 30.0)
             seg_table.set_total_span(total_span)
 
         # End Diaphragm fields — disabled when Optimized----------------------
@@ -504,30 +508,204 @@ class AdditionalInputs(QDialog):
             if hasattr(tab_widget, "refresh_active_tab"):
                 tab_widget.refresh_active_tab()
 
-    # ── Dialog Persistence ───────────────────────────────────────────────────────
+    # ── Dialog Persistence & Validation ─────────────────────────────────────────
 
-    def _save_inputs(self):  # on_change: validates all tabs then commits working_input_dict and emits CAD update signal
+    def _navigate_to_widget(self, widget: QWidget):
+        """Walks up the widget hierarchy and activates every ancestor QTabWidget page to reveal the widget."""
+        curr = widget
+        while curr is not None and curr is not self:
+            parent = curr.parent()
+            if isinstance(parent, QTabWidget):
+                idx = parent.indexOf(curr)
+                if idx >= 0:
+                    parent.setCurrentIndex(idx)
+            curr = parent
+        widget.setFocus()
+
+    def _validate_custom_inputs(self) -> tuple[bool, str, QWidget | None]:
+        """
+        Validates all parameters that are configured as or switched to Custom.
+        Returns (is_valid, error_message, invalid_widget).
+        """
+        # 1. Mode Line Edit fields (<field_id>.mode and <field_id>.value)
+        for combo in self.findChildren(QComboBox):
+            c_name = combo.objectName()
+            if not c_name or not c_name.endswith(".mode"):
+                continue
+            if combo.isEnabled() and combo.currentText().strip() == "Custom":
+                val_id = c_name[:-5] + ".value"
+                val_w = self.findChild(QLineEdit, val_id)
+                if val_w and val_w.isEnabled() and not val_w.text().strip():
+                    lbl = self.findChild(QLabel, c_name[:-5] + "_label")
+                    field_name = lbl.text().replace("&gamma;", "γ").replace("&alpha;", "α").replace("&nu;", "ν") if lbl else c_name[:-5]
+                    field_name = field_name.rstrip(":").strip()
+                    # Strip HTML tags from label if any
+                    import re
+                    clean_label = re.sub(r'<[^>]+>', '', field_name)
+                    return False, f"Parameter '{clean_label}' is set to Custom but has no value specified.", val_w
+
+        # 2. Crash Barrier Custom Validation
+        cb_combo = self.findChild(QComboBox, KEY_CB_TYPE)
+        if cb_combo and cb_combo.currentText().strip() == "Custom":
+            cb_checks = [
+                (KEY_CB_WIDTH, "Crash Barrier Width"),
+                (KEY_CB_HEIGHT, "Crash Barrier Height"),
+                (KEY_CB_LOAD, "Crash Barrier Load"),
+                (KEY_CB_DENSITY, "Crash Barrier Density"),
+                (KEY_CB_AREA, "Crash Barrier Area"),
+            ]
+            for key, lbl_text in cb_checks:
+                w = self.findChild(QLineEdit, key)
+                if w and w.isEnabled() and not w.text().strip():
+                    return False, f"Crash barrier parameter '{lbl_text}' is empty. Please enter a valid value.", w
+
+        # 3. Median Custom Validation
+        md_combo = self.findChild(QComboBox, KEY_MD_TYPE)
+        if md_combo and md_combo.currentText().strip() == "Custom":
+            md_checks = [
+                (KEY_MD_WIDTH, "Median Width"),
+                (KEY_MD_HEIGHT, "Median Height"),
+                (KEY_MD_LOAD, "Median Load"),
+                (KEY_MD_DENSITY, "Median Density"),
+                (KEY_MD_AREA, "Median Area"),
+            ]
+            for key, lbl_text in md_checks:
+                w = self.findChild(QLineEdit, key)
+                if w and w.isEnabled() and not w.text().strip():
+                    return False, f"Median parameter '{lbl_text}' is empty. Please enter a valid value.", w
+
+        # 4. Railing Custom Validation
+        rl_combo = self.findChild(QComboBox, KEY_RL_TYPE)
+        if rl_combo and rl_combo.currentText().strip() == "Custom":
+            rl_checks = [
+                (KEY_RL_WIDTH, "Railing Width"),
+                (KEY_RL_HEIGHT, "Railing Height"),
+            ]
+            for key, lbl_text in rl_checks:
+                w = self.findChild(QLineEdit, key)
+                if w and w.isEnabled() and not w.text().strip():
+                    return False, f"Railing parameter '{lbl_text}' is empty. Please enter a valid value.", w
+
+            load_combo = self.findChild(QComboBox, KEY_RL_LOAD_MODE)
+            if load_combo and load_combo.isEnabled() and load_combo.currentText().strip() == "Custom":
+                w = self.findChild(QLineEdit, KEY_RL_LOAD_VALUE)
+                if w and w.isEnabled() and not w.text().strip():
+                    return False, "Railing parameter 'Railing Load' is empty. Please enter a valid value.", w
+
+        # 5. Wearing Course Custom Material Validation
+        wc_combo = self.findChild(QComboBox, KEY_WC_MATERIAL)
+        if wc_combo and wc_combo.currentText().strip() == "Custom":
+            w = self.findChild(QLineEdit, KEY_WC_DENSITY)
+            if w and w.isEnabled() and not w.text().strip():
+                return False, "Wearing course parameter 'Density' is empty. Please enter a valid value.", w
+
+        # 6. AdaptiveWidgets (e.g. Design Mode is Custom)
+        if str(self.working_input_dict.get(KEY_DESIGN_MODE, "Optimized")).strip() == "Custom":
+            from osdagbridge.desktop.ui.dialogs.additional_input.ui_builder.common_ui_builder import AdaptiveWidget
+            for adaptive in self.findChildren(AdaptiveWidget):
+                active = adaptive.currentWidget()
+                if isinstance(active, QLineEdit) and active.isEnabled() and not active.text().strip():
+                    fid = getattr(adaptive, "_field_id", "")
+                    lbl = self.findChild(QLabel, fid + "_label") if fid else None
+                    lbl_text = lbl.text().rstrip(":").strip() if lbl else (fid or "Design parameter")
+                    import re
+                    clean_label = re.sub(r'<[^>]+>', '', lbl_text)
+                    return False, f"Design parameter '{clean_label}' is empty. Please enter a valid value.", active
+
+        return True, "", None
+
+    def _save_inputs(self, show_success_popup: bool = True) -> bool:  # on_change: validates all tabs then commits working_input_dict and emits CAD update signal
+        # First validate custom inputs
+        is_valid, err_msg, invalid_widget = self._validate_custom_inputs()
+        if not is_valid:
+            if invalid_widget:
+                self._navigate_to_widget(invalid_widget)
+            CustomMessageBox(
+                title="Validation Error",
+                text=err_msg,
+                buttons=["OK"],
+                dialogType=MessageBoxType.Warning,
+            ).exec()
+            return False
 
         # Flush the currently-displayed stiffener member's widgets before committing.
-        # _save_stiffener_member_data otherwise only runs when switching *away* from a
-        # member (via _on_stiffener_member_load), so the last-viewed girder (e.g. G4)
-        # would never be persisted. This gives it the same save the other girders get.
         combo = self.findChild(QComboBox, KEY_MP_STIFFENER_SELECT_MEMBER_ID)
         if combo and combo.currentText().strip():
             self._save_stiffener_member_data(combo.currentText().strip())
 
         self.default_input_dict.update(self.working_input_dict)
+        self._saved_snapshot = deepcopy(self.working_input_dict)
+
         from osdagbridge.desktop.ui.docks.cad_cross_section import CrossSectionCADWidget
         cad = self.findChild(CrossSectionCADWidget, KEY_TS_CAD_PREVIEW)
         if cad:
             self.update_template_page_2d_cad.emit(cad.params)
         
-        CustomMessageBox(
-            title="Saved",
-            text="Inputs saved successfully.",
-            buttons=["OK"],
-            dialogType=MessageBoxType.Success,
-        ).exec()
+        if show_success_popup:
+            CustomMessageBox(
+                title="Saved",
+                text="Inputs saved successfully.",
+                buttons=["OK"],
+                dialogType=MessageBoxType.Success,
+            ).exec()
+
+        return True
+
+    def _has_unsaved_changes(self) -> bool:
+        """Compares current working_input_dict against saved snapshot, ignoring transient differences."""
+        if not hasattr(self, "_saved_snapshot") or not self._saved_snapshot:
+            return False
+
+        combo = self.findChild(QComboBox, KEY_MP_STIFFENER_SELECT_MEMBER_ID)
+        if combo and combo.currentText().strip():
+            self._save_stiffener_member_data(combo.currentText().strip())
+
+        all_keys = set(self.working_input_dict.keys()) | set(self._saved_snapshot.keys())
+        for k in all_keys:
+            v_work = self.working_input_dict.get(k)
+            v_snap = self._saved_snapshot.get(k)
+            if v_work == v_snap:
+                continue
+            str_work = "" if v_work is None else str(v_work).strip()
+            str_snap = "" if v_snap is None else str(v_snap).strip()
+            if str_work == str_snap:
+                continue
+            try:
+                if float(str_work) == float(str_snap):
+                    continue
+            except (ValueError, TypeError):
+                pass
+            return True
+        return False
+
+    def closeEvent(self, event):
+        """Warns about unsaved changes on dialog close."""
+        if self._has_unsaved_changes():
+            msg = CustomMessageBox(
+                title="Unsaved Changes",
+                text="You have unsaved changes in Additional Inputs.",
+                informativeText="Do you want to save before closing?",
+                buttons=["Save", "Discard", "Cancel"],
+                dialogType=MessageBoxType.Warning,
+            )
+            result = msg.exec()
+            if result == "Save":
+                if self._save_inputs(show_success_popup=False):
+                    event.accept()
+                else:
+                    event.ignore()
+            elif result == "Discard":
+                self.working_input_dict = deepcopy(self._saved_snapshot)
+                self.set_defaults()
+                event.accept()
+            else:  # Cancel or closed message box
+                event.ignore()
+        else:
+            event.accept()
+
+    def reject(self):
+        """Override QDialog.reject so Escape key triggers closeEvent uniformly."""
+        self.close()
 
     def _show_validation_errors(self, errors):  # utility: displays validation error list in a warning popup
         message = "\n\n".join(f"• {err}" for err in errors)
@@ -1274,7 +1452,8 @@ class AdditionalInputs(QDialog):
 
         segments = self.working_input_dict.get(seg_key)
         print(f"@@: Loading segments for {girder_id} with key={seg_key}, segments={segments}")
-        total_span = float(self.working_input_dict.get(KEY_SPAN))
+        span_val = self.working_input_dict.get(KEY_SPAN)
+        total_span = float(span_val if span_val not in (None, "") else 30.0)
         if not segments:
             segments = [{"id": f"{girder_id}M1", "start": 0.0, "end": total_span}]
             self.working_input_dict[seg_key] = segments
@@ -2567,7 +2746,8 @@ class AdditionalInputs(QDialog):
         no_bracings_w = self.findChild(QLineEdit, KEY_MP_CB_NO_OF_CROSS_BRACINGS)
         count = int(float(no_bracings_w.text() or "1")) if no_bracings_w else 1
 
-        span = float(self.working_input_dict.get(KEY_SPAN))
+        span_raw = self.working_input_dict.get(KEY_SPAN)
+        span = float(span_raw) if span_raw not in (None, "") else 0.0
         if span > 0:
             target_widget.setText(f"{span / (count + 1):.3f}")
         else:
@@ -2923,7 +3103,7 @@ class AdditionalInputs(QDialog):
         
         # Fallback to get data from Project Location
         if not zone:
-            zone = working_input_dict.get("project.location", {}).get("weather_data", {}).get("zone", "")
+            zone = working_input_dict.get(KEY_PROJECT_LOCATION, {}).get("weather_data", {}).get("zone", "")
 
         if not zone:
             return {}

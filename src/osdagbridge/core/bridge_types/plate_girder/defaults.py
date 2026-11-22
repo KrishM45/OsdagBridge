@@ -386,6 +386,24 @@ def _update_design_options_cont_defaults(input_dict: dict) -> None:
 
 # Per-member CB keys — excludes select_girders/member_id (derived from key structure)
 # and no_of_cross_bracings/spacing (global / computed values).
+_CB_DEFAULT_ANGLE = "IS 100 x 100 x 10"
+_CB_DEFAULT_SECTION_TYPE = "Double Angle (Long Leg)"
+_CB_DEFAULTS = {
+    "select_girders":               "",
+    "member_id":                    "",
+    "type":                         VALUES_CROSS_BRACING_TYPE[1],   # "X-bracing"
+    "bracing_connection":           "Bolted",
+    "bracing_section_type":         _CB_DEFAULT_SECTION_TYPE,
+    "bracing_section_designation":  _CB_DEFAULT_ANGLE,
+    "top_chord":                    VALUES_NO_YES[1],               # "Yes"
+    "top_chord_section_type":       _CB_DEFAULT_SECTION_TYPE,
+    "top_chord_section_desig":      _CB_DEFAULT_ANGLE,
+    "bottom_chord":                 VALUES_NO_YES[1],               # "Yes"
+    "bottom_chord_section_type":    _CB_DEFAULT_SECTION_TYPE,
+    "bottom_chord_section_desig":   _CB_DEFAULT_ANGLE,
+    "spacing":                      DEFAULT_CROSS_BRACING_SPACING,  # 3.0
+}
+
 _CB_PROPS = [
     (KEY_MP_CB_TYPE,                        "type"),
     (KEY_MP_CB_BRACING_SECTION_TYPE,        "bracing_section_type"),
