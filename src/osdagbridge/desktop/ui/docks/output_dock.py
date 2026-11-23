@@ -861,9 +861,28 @@ class OutputDock(QWidget):
         from osdagbridge.core.utils.common import KEY_ANALYSIS_MEMBER
         combo_analysis = self._w(KEY_ANALYSIS_MEMBER)
         if combo_analysis is not None:
+            transverse_items = []
+            try:
+                from osdagbridge.core.bridge_types.plate_girder.plot_generator import _find_transverse_lines
+                ds = getattr(self.backend, "get_results_dataset", lambda: None)()
+                nodes, members = getattr(self.backend, "get_nodes_members", lambda: ({}, {}))()
+                edge_dist = getattr(self.backend, "get_edge_dist", lambda: 0.0)()
+                trans_lines = _find_transverse_lines(nodes, members, ds=ds, edge_dist=edge_dist)
+                transverse_items = list(trans_lines.keys())
+            except Exception:
+                transverse_items = []
+
+            if not transverse_items and self.backend and hasattr(self.backend, "input_dict"):
+                from osdagbridge.core.utils.common import KEY_MP_CB_NO_OF_CROSS_BRACINGS
+                n_cb = int(self.backend.input_dict.get(KEY_MP_CB_NO_OF_CROSS_BRACINGS, 0) or 0)
+                if n_cb > 0:
+                    transverse_items = ["End Diaphragm (Start)"] + [f"Cross Bracing {i}" for i in range(1, n_cb + 1)] + ["End Diaphragm (End)"]
+                else:
+                    transverse_items = ["End Diaphragm (Start)", "End Diaphragm (End)"]
+
             combo_analysis.blockSignals(True)
             combo_analysis.clear()
-            combo_analysis.addItems(["All"] + items)
+            combo_analysis.addItems(["All"] + items + transverse_items)
             combo_analysis.setCurrentIndex(0)
             combo_analysis.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo_analysis.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)

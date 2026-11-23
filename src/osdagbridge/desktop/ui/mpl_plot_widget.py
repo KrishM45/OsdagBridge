@@ -450,8 +450,6 @@ class MplPlotWidget(QWidget):
         combo_member = output_dock.output_widget.findChild(QComboBox, "analysis.member")
         if combo_member is not None:
             combo_member.currentTextChanged.connect(self.update_plot)
-            # Make sure it fires an update if changed from UI, since grillage might be active
-            combo_member.currentTextChanged.connect(lambda text: self._on_grillage_toggled(self._grillage_mode) if self._grillage_mode else None)
 
         # 2. Connect Force Radios
         from osdagbridge.desktop.ui.utils.custom_widgets import CustomRadioButton
@@ -510,6 +508,7 @@ class MplPlotWidget(QWidget):
 
     def update_plot(self, *_args):
         if self._grillage_mode:
+            self._render_grillage()
             return
 
         if self._ds_all is None or self._output_dock is None:
@@ -705,43 +704,51 @@ class MplPlotWidget(QWidget):
         self._apply_annotation_visibility()
         self._canvas.draw_idle()
 
+    def _render_grillage(self):
+        """Render the 3-D bridge grillage mesh, preserving camera angles and applying visual overlays."""
+        if not self._nodes:
+            return
+        old_elev, old_azim = None, None
+        if self._fig and self._fig.axes and hasattr(self._fig.axes[0], 'elev'):
+            old_elev = self._fig.axes[0].elev
+            old_azim = self._fig.axes[0].azim
+        plt.close(self._fig)
+        sel_girder = self._current_member()
+        self._fig = build_figure_grillage(
+            self._nodes, self._members, edge_dist=self._edge_dist,
+            selected_girder=sel_girder, ds=self._ds_all
+        )
+        self._attach_figure(self._fig)
+        if self._fig.axes and old_elev is not None and old_azim is not None:
+            self._fig.axes[0].view_init(elev=old_elev, azim=old_azim)
+        if self._fig.axes:
+            title = self._fig.axes[0].get_title()
+            self._fig.axes[0].set_title("")
+            self._title_overlay.update_text(title)
+            self._position_title_overlay()
+        
+        self._apply_node_visibility()
+        self._apply_axis_visibility()
+        self._apply_supports_visibility()
+        self._apply_grid_visibility()
+        self._apply_girder_labels_visibility()
+        self._apply_element_number_visibility()
+        self._summary_overlay.hide()
+        
+        if self._fig.axes and hasattr(self._fig.axes[0], 'set_box_aspect'):
+            self._fig.axes[0].set_box_aspect(
+                aspect=(2.5, 1.2, 1.0),
+                zoom=self._zoom_scale,
+            )
+        self._canvas.draw()
+        self._store_orig_limits()
+        QTimer.singleShot(100, self._update_navcube_visibility)
+
     # Toolbar Slots
     def _on_grillage_toggled(self, checked: bool):
         self._grillage_mode = checked
         if checked:
-            if not self._nodes: return
-            old_elev, old_azim = None, None
-            if self._fig and self._fig.axes and hasattr(self._fig.axes[0], 'elev'):
-                old_elev = self._fig.axes[0].elev
-                old_azim = self._fig.axes[0].azim
-            plt.close(self._fig)
-            sel_girder = self._current_member()
-            self._fig = build_figure_grillage(self._nodes, self._members, edge_dist=self._edge_dist, selected_girder=sel_girder)
-            self._attach_figure(self._fig)
-            if self._fig.axes and old_elev is not None and old_azim is not None:
-                self._fig.axes[0].view_init(elev=old_elev, azim=old_azim)
-            if self._fig.axes:
-                title = self._fig.axes[0].get_title()
-                self._fig.axes[0].set_title("")
-                self._title_overlay.update_text(title)
-                self._position_title_overlay()
-            
-            self._apply_node_visibility()
-            self._apply_axis_visibility()
-            self._apply_supports_visibility()
-            self._apply_grid_visibility()
-            self._apply_girder_labels_visibility()
-            self._apply_element_number_visibility()
-            self._summary_overlay.hide()
-            
-            if self._fig.axes and hasattr(self._fig.axes[0], 'set_box_aspect'):
-                self._fig.axes[0].set_box_aspect(
-                    aspect=(2.5, 1.2, 1.0),
-                    zoom=self._zoom_scale,
-                )
-            self._canvas.draw()
-            self._store_orig_limits()
-            QTimer.singleShot(100, self._update_navcube_visibility)
+            self._render_grillage()
         else:
             self.update_plot()
 
